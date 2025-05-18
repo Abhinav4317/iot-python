@@ -35,4 +35,4 @@ def setup_phase():
     with open(SERVER_DATA_FILE, "w") as f:
         json.dump(server_data, f, indent=2)
 
-    return public_params  # We can return this to show it on API
+    return public_params

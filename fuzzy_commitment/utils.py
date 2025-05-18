@@ -11,7 +11,6 @@ def hash_bytes(input_str: str) -> str:
     return hasher.hexdigest()
 
 def xor_hash(h1: str, h2: str) -> str:
-    # XOR two hex-encoded hashes
     b1 = bytes.fromhex(h1)
     b2 = bytes.fromhex(h2)
     return bytes(a ^ b for a, b in zip(b1, b2)).hex()
@@ -25,6 +24,5 @@ def load_json(filepath):
         return json.load(f)
 
 def encode_bitstring_to_poly(bits, modulus):
-    # pad to length N with zeros
     padded = bits + [0] * (512 - len(bits))
     return np.array(padded) % modulus

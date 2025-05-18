@@ -13,8 +13,6 @@ def authenticate_user(ID_i: str, theta5_from_user: str):
     user_data = server_data["users"].get(ID_i)
     if not user_data:
         return {"message": "Authentication failed. Unknown user."}
-
-    # Step A2: MS verifies θ5
     theta2 = user_data["theta2"]
     theta3 = user_data["theta3"]
     theta4 = user_data["theta4"]
@@ -26,7 +24,6 @@ def authenticate_user(ID_i: str, theta5_from_user: str):
     if expected_theta5 != theta5_from_user:
         return {"message": "Authentication failed. Invalid θ5."}
 
-    # Step A3: Return θ6
     theta6 = user_data["theta6"]
 
     T_h = t2 - t1

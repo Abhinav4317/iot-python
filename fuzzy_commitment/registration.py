@@ -1,5 +1,3 @@
-# fuzzy_commitment/registration.py
-
 import numpy as np
 import secrets
 import time
@@ -42,13 +40,13 @@ def register_user(ID_i: str, biometric_bits: list):
     b = Rq(pub["b"], Q)
 
     t3 = time.perf_counter()
-    a_vi = a * v_i               # T_Mp1
-    w_i = a * v_i                # T_Mp2 (same op again)
-    Z_i = w_i * b                # T_Mp3
+    a_vi = a * v_i               
+    w_i = a * v_i                
+    Z_i = w_i * b               
     t4 = time.perf_counter()
 
     t5 = time.perf_counter()
-    beta_i = a_vi + x_poly       # T_add
+    beta_i = a_vi + x_poly      
     t6 = time.perf_counter()
 
     beta_i_str = str(beta_i.poly.coeffs.tolist())

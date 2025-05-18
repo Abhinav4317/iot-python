@@ -1,5 +1,3 @@
-# fuzzy_commitment/login.py
-
 import numpy as np
 import time
 import secrets
@@ -30,7 +28,7 @@ def login_user(ID_i: str, biometric_bits: list):
     a = Rq(server_data["public_parameters"]["a"], Q)
 
     t1 = time.perf_counter()
-    w_i_prime = (Zi * a) * mk  # T_Mp
+    w_i_prime = (Zi * a) * mk  
     t2 = time.perf_counter()
 
     xr_prime = biometric_bits + [0] * 256
@@ -38,7 +36,7 @@ def login_user(ID_i: str, biometric_bits: list):
     xq_poly = Rq(xq_prime, Q)
 
     t3 = time.perf_counter()
-    beta_q = w_i_prime + xq_poly  # T_add
+    beta_q = w_i_prime + xq_poly  
     t4 = time.perf_counter()
 
     nonce = smart_card_data["N"]
@@ -83,8 +81,6 @@ def login_user(ID_i: str, biometric_bits: list):
         "theta6": theta6
     })
     save_json(SMARTCARD_FILE, smart_card_data)
-
-    # Calculate timings
     T_Mp = t2 - t1
     T_add = t4 - t3
     T_h = t6 - t5
