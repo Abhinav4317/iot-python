@@ -1,101 +1,122 @@
-import numpy as np
-import time
+import json
+import hashlib
 import secrets
-from she import Rq
-from fuzzy_commitment.constants import Q, T, N, STD_DEV
-from fuzzy_commitment.utils import (
-    hash_bytes, xor_hash, encode_bitstring_to_poly, save_json, load_json
+from time import perf_counter
+from she.Rq import Rq
+from fuzzy_commitment.constants import (
+    N, Q, T, STD_DEV, HASH_FUNCTION, HAMMING_THRESHOLD, SYSTEM_PARAMETER_S,SERVER_SECRET,SESSION_TIMEOUT
 )
+import hmac
+from cryptography.fernet import Fernet
+SERVER_DATA_FILE = "data/server_data.json"
+SMARTCARD_FILE   = "data/smart_card_data.json"
 
-SERVER_FILE = "data/server_data.json"
-SMARTCARD_FILE = "data/smart_card_data.json"
+def load_json(path):
+    with open(path, "r") as f:
+        return json.load(f)
+
+def save_json(path, data):
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
+def hash_bytes(b: bytes) -> str:
+    h = hashlib.new(HASH_FUNCTION)
+    h.update(b)
+    return h.hexdigest()
+
+def xor_hex(h1: str, h2: str) -> str:
+    b1 = bytes.fromhex(h1)
+    b2 = bytes.fromhex(h2)
+    return bytes(x ^ y for x, y in zip(b1, b2)).hex()
+
+def hamming_distance(a, b):
+    return sum(x != y for x, y in zip(a, b))
 
 def login_user(ID_i: str, biometric_bits: list):
-    server_data = load_json(SERVER_FILE)
-    smart_card_data = load_json(SMARTCARD_FILE)
+    # 1) load state
+    srv = load_json(SERVER_DATA_FILE)
+    blob = open(SMARTCARD_FILE,"rb").read()
+    card = json.loads(Fernet(SERVER_SECRET).decrypt(blob))
+    pseudonym = hmac.new(SERVER_SECRET, ID_i.encode(), hashlib.sha256).hexdigest()
+    user  = srv["users"].get(pseudonym)
+    if not user:
+        raise ValueError("User not registered")
 
-    user_data = server_data["users"].get(ID_i)
-    if not user_data:
-        raise ValueError("User not registered.")
+    # unpack
+    N_nonce    = bytes.fromhex(card["N"])
+    u_arr      = card["u"]
+    beta_arr   = card["beta"]
+    k_i        = card["k_i"]
 
-    beta_i = Rq(user_data["beta_i"], Q)
-    beta_i_str = user_data["beta_i_str"]
-    ri_stored = user_data["ri"]
-    ki = user_data["ki"]
-    mk = Rq(server_data["secret_parameters"]["mk"], Q)
+    r_i_stored = user["r_i"]
+    t_coeffs   = user["t"]
+    δ_i        = user["delta_i"]
+    e_i        = user["e_i"]
 
-    Zi = Rq(user_data["Zi"], Q)
-    a = Rq(server_data["public_parameters"]["a"], Q)
+    t0 = perf_counter()
 
-    t1 = time.perf_counter()
-    w_i_prime = (Zi * a) * mk  
-    t2 = time.perf_counter()
+    # reconstruct Rq
+    a = Rq(srv["public_parameters"]["a"], Q)
+    u = Rq(u_arr, Q)
+    beta = Rq(beta_arr, Q)
+    t_poly = Rq(t_coeffs, Q)
 
-    xr_prime = biometric_bits + [0] * 256
-    xq_prime = encode_bitstring_to_poly(xr_prime, Q)
-    xq_poly = Rq(xq_prime, Q)
+    # 2) validate δ_i
+    h_t   = hash_bytes(json.dumps(t_coeffs).encode())
+    h_IDr = hash_bytes(ID_i.encode() + bytes.fromhex(r_i_stored))
+    if not hmac.compare_digest(δ_i, xor_hex(h_t, h_IDr)):
+        return {"error": "Commitment validation failed"}
 
-    t3 = time.perf_counter()
-    beta_q = w_i_prime + xq_poly  
-    t4 = time.perf_counter()
+    # 3) recover m = β - u
+    m_poly = beta + (Rq([-c for c in u.coeffs], Q))
+    m_bits = m_poly.coeffs.tolist()[:len(biometric_bits)+T]
+    x_r_prime = m_bits[:len(biometric_bits)]
+    k_prime   = m_bits[len(biometric_bits):]
 
-    nonce = smart_card_data["N"]
+    # 4) biometric match
+    if hamming_distance(biometric_bits, x_r_prime) > HAMMING_THRESHOLD:
+        return {"error": "Biometric mismatch"}
 
-    t5 = time.perf_counter()
-    ci_prime = hash_bytes("".join(map(str, ki)) + nonce)
-    ri_prime = hash_bytes(ci_prime + beta_i_str)
+    # 5) key & r_i check
+    c_i = hash_bytes(bytes(k_i) + N_nonce)
+    r_i_prime = hash_bytes(bytes.fromhex(c_i) + json.dumps(beta_arr).encode())
+    if r_i_prime != r_i_stored:
+        return {"error": "Key mismatch"}
 
-    if ri_prime != ri_stored:
-        return {"message": "Key mismatch. Access denied."}
+    # 6) compute θs
+    θ1 = xor_hex(e_i, r_i_prime)
+    R_u = secrets.token_bytes(16)
+    θ2 = xor_hex(θ1, R_u.hex())
+    θ3 = hash_bytes(SYSTEM_PARAMETER_S.encode() + R_u)
+    θ4 = xor_hex(c_i, θ3)
+    θ5 = hash_bytes(bytes.fromhex(θ2) + bytes.fromhex(θ3) + bytes.fromhex(θ4))
+    θ6 = hash_bytes(SYSTEM_PARAMETER_S.encode() + ID_i.encode())
 
-    e_i = user_data["e_i"]
-    ei_xor_ri_prime = xor_hash(e_i, ri_prime)
+    # 7) persist and respond
+    import time
+    now = time.time()
+    last_ts = user.get("θ1_ts", 0)
+    if now - last_ts > SESSION_TIMEOUT:
+        user["θ1_ts"] = now
+    else:
+        return {"error": "Replay detected"}
 
-    Ru = secrets.token_hex(16)
-    s = user_data.get("s", "system_param")
+    user.update({"theta1": θ1, "theta2": θ2, "theta4": θ4, "theta5": θ5, "theta6": θ6})
+    user["R_s"] = secrets.token_bytes(16).hex()
+    save_json(SERVER_DATA_FILE, srv)
 
-    theta1 = ei_xor_ri_prime
-    theta2 = xor_hash(theta1, Ru)
-    theta3 = hash_bytes(s + Ru)
-    theta4 = xor_hash(ci_prime, theta3)
-    theta5 = hash_bytes(theta2 + theta3 + theta4)
-    theta6 = hash_bytes(s + ID_i)
-    t6 = time.perf_counter()
-
-    server_data["users"][ID_i].update({
-        "theta1": theta1,
-        "theta2": theta2,
-        "theta3": theta3,
-        "theta4": theta4,
-        "theta5": theta5,
-        "theta6": theta6
-    })
-    save_json(SERVER_FILE, server_data)
-
-    smart_card_data.update({
-        "theta1": theta1,
-        "theta2": theta2,
-        "theta3": theta3,
-        "theta4": theta4,
-        "theta5": theta5,
-        "theta6": theta6
-    })
-    save_json(SMARTCARD_FILE, smart_card_data)
-    T_Mp = t2 - t1
-    T_add = t4 - t3
-    T_h = t6 - t5
-    T_total = T_Mp + T_add + T_h
-
-    print(f"[Perf] T_total = T_Mp + T_add + T_h = {T_total:.6f} seconds")
+    t1 = perf_counter()
+    print(f"Time for login: {t1-t0:.6f} s")
 
     return {
-        "message": "Login successful",
-        "smart_card_data": {
-            "theta1": theta1,
-            "theta2": theta2,
-            "theta3": theta3,
-            "theta4": theta4,
-            "theta5": theta5,
-            "theta6": theta6
+        "message": "Login step 1 successful",
+        "response": {
+            "t":        t_coeffs,
+            "R_s":      user["R_s"],
+            "theta1":   θ1,
+            "theta2":   θ2,
+            "theta4":   θ4,
+            "theta5":   θ5,
+            "theta6":   θ6
         }
     }

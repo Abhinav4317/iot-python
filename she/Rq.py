@@ -1,55 +1,48 @@
 import numpy as np
-from .utils import crange
+from .utils import crange, GLOBAL_PSI, GLOBAL_PSI_INV, ntt, intt, negacyclic_convolution
 
+class Rq:
+    """
+    Element of R_q = Z_q[x] / (x^n + 1).
+    """
 
-class Rq(object):
-    '''
-    Ring-Polynomial: Fq[x] / (x^n + 1)
-        range of the reminder is set to (−q/2, q/2]
-    '''
     def __init__(self, coeffs, q):
-        '''
-        # Args
-            coeffs: coefficients array of a polynomial
-            q: modulus
-        '''
-        n = len(coeffs)  # degree of a polynomial
-
-        f = np.zeros((n+1), dtype=np.int64)  # x^n + 1
-        f[0] = f[-1] = 1
-        f = np.poly1d(f)
-        self.f = f
-
-        self.q = q
         coeffs = np.array(coeffs, dtype=np.int64) % q
-        coeffs = crange(coeffs, q)
-        self.poly = np.poly1d(np.array(coeffs, dtype=np.int64))
+        self.q = q
+        self.n = coeffs.size
+        self.coeffs = crange(coeffs, q)
+        # Use precomputed roots:
+        self.psi     = GLOBAL_PSI
+        self.psi_inv = GLOBAL_PSI_INV
 
     def __repr__(self):
-        template = 'Rq: {} (mod {}), reminder range: ({}, {}]'
-        return template.format(self.poly.__repr__(), self.q,
-                               -self.q//2, self.q//2)
-
-    def __len__(self):
-        return len(self.poly)  # degree of a polynomial
+        return f"Rq({self.coeffs.tolist()}, mod {self.q})"
 
     def __add__(self, other):
-        coeffs = np.polyadd(self.poly, other.poly).coeffs
-        return Rq(coeffs, self.q)
+        return Rq((self.coeffs + other.coeffs) % self.q, self.q)
+
+    def __rmul__(self, scalar):
+        return Rq((self.coeffs * int(scalar)) % self.q, self.q)
 
     def __mul__(self, other):
-        q, r = np.polydiv(np.polymul(self.poly, other.poly), self.f)
-        coeffs = r.coeffs
-        return Rq(coeffs, self.q)
+        # fallback direct convolution
+        c = negacyclic_convolution(self.coeffs, other.coeffs, self.q, self.psi)
+        return Rq(c, self.q)
 
-    def __rmul__(self, integer):
-        coeffs = (self.poly.coeffs * integer)
-        return Rq(coeffs, self.q)
+    def __pow__(self, exp):
+        if exp == 0:
+            return Rq([1] + [0]*(self.n-1), self.q)
+        result = self
+        for _ in range(exp-1):
+            result = result * self
+        return result
 
-    def __pow__(self, integer):
-        if integer == 0:
-            return Rq([1], self.q)
-        ret = self
-        for i in range(integer-1):
-            ret *= ret
-        return ret
+    def to_ntt(self):
+        """Forward NTT to coefficient domain → NTT domain."""
+        return ntt(self.coeffs, self.psi, self.q)
+
+    @staticmethod
+    def from_ntt(A, psi_inv, q):
+        """Inverse NTT from domain → coefficient polynomial."""
+        coeffs = intt(A, psi_inv, q)
+        return Rq(coeffs, q)
